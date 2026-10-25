@@ -15,7 +15,7 @@
     color-scheme: dark;
     --bg: #08090d;
     --text: #f5f5f7;
-    --muted: #555965;
+    --muted: #858995;
     --accent: #65e6b2;
     --ring: #252831;
 }
@@ -44,9 +44,8 @@ body {
 
 .app {
     width: 100%;
-    min-height: 100%;
+    height: 100%;
     display: flex;
-    flex-direction: column;
     justify-content: center;
     align-items: center;
     padding: 24px;
@@ -70,58 +69,52 @@ body {
     border-radius: 50%;
 }
 
-/* Треугольная стрелка, указывающая на север */
+/* Треугольная стрелка на внешнем кольце */
 
 .needle {
     position: absolute;
-    top: -7px;
+    top: -8px;
     left: 50%;
     width: 0;
     height: 0;
+
     border-left: 7px solid transparent;
     border-right: 7px solid transparent;
-    border-bottom: 19px solid var(--accent);
+    border-bottom: 18px solid var(--accent);
+
     transform: translateX(-50%) rotate(0deg);
-    transform-origin: 50% calc(50% + 7px);
-    filter: drop-shadow(0 0 7px #65e6b255);
-    transition: transform 0.12s linear;
+    transform-origin: 50% calc(50% + 8px);
+
+    filter: drop-shadow(0 0 6px #65e6b244);
 }
 
-/* Внутренний круг спидометра */
+/* Внутренний спидометр */
 
 .speed-ring {
     position: absolute;
     inset: 13%;
     border-radius: 50%;
     border: 1px solid #1c1f27;
+
     background: radial-gradient(
         circle,
         #11131a 0%,
-        #0b0c11 72%,
+        #0b0c11 75%,
         #08090d 100%
     );
 }
 
-/* Небольшая декоративная отметка сверху */
-
-.top-mark {
-    position: absolute;
-    top: 16%;
-    left: 50%;
-    width: 2px;
-    height: 8px;
-    border-radius: 2px;
-    background: var(--muted);
-    transform: translateX(-50%);
-}
+/* Центральное значение */
 
 .center {
     position: relative;
     z-index: 2;
+
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+
     width: 100%;
 }
 
@@ -130,23 +123,26 @@ body {
     line-height: 1;
     font-weight: 300;
     letter-spacing: -5px;
+
     font-variant-numeric: tabular-nums;
-    font-feature-settings: "tnum";
 }
 
 .unit {
     margin-top: 13px;
-    color: #858995;
+    color: var(--muted);
     font-size: 13px;
     font-weight: 500;
     letter-spacing: 2px;
 }
 
-.bottom {
-    position: absolute;
-    bottom: max(28px, env(safe-area-inset-bottom));
+/* Кнопка запуска */
+
+.start-area {
+    position: fixed;
     left: 0;
     right: 0;
+    bottom: max(28px, env(safe-area-inset-bottom));
+
     display: flex;
     justify-content: center;
 }
@@ -155,10 +151,11 @@ button {
     border: 1px solid #282b35;
     background: #11131a;
     color: #d9dbe2;
+
     padding: 13px 24px;
     border-radius: 30px;
+
     font-size: 14px;
-    font-weight: 500;
     cursor: pointer;
 }
 
@@ -166,37 +163,26 @@ button:active {
     background: #1c2029;
 }
 
-button:disabled {
-    opacity: 0.45;
-}
-
 @media (max-height: 550px) {
     .instrument {
         width: min(60vh, 300px);
-    }
-
-    .app {
-        padding: 12px;
-    }
-
-    .bottom {
-        bottom: max(12px, env(safe-area-inset-bottom));
     }
 }
 </style>
 </head>
 
 <body>
+
 <div class="app">
 
     <div class="instrument">
 
         <div class="compass"></div>
+
+        <!-- Стрелка компаса -->
         <div class="needle" id="needle"></div>
 
-        <div class="speed-ring">
-            <div class="top-mark"></div>
-        </div>
+        <div class="speed-ring"></div>
 
         <div class="center">
             <div class="speed" id="speed">0.0</div>
@@ -205,124 +191,104 @@ button:disabled {
 
     </div>
 
-    <div class="bottom">
-        <button id="start">Запустить</button>
-    </div>
+</div>
 
+<div class="start-area">
+    <button id="start">Запустить</button>
 </div>
 
 <script>
 (() => {
     "use strict";
 
-    const speedElement = document.getElementById("speed");
     const needle = document.getElementById("needle");
+    const speedElement = document.getElementById("speed");
     const startButton = document.getElementById("start");
 
     let running = false;
     let gpsWatch = null;
 
-    // Последняя оценка скорости по GPS.
-    let gpsSpeed = null;
-    let gpsTime = 0;
-
-    // Скорость, оцениваемая интегрированием ускорения.
     let estimatedSpeed = 0;
+    let displayedSpeed = 0;
 
-    // Последнее измерение акселерометра.
+    let gpsSpeed = null;
+    let lastGpsTime = 0;
+    let lastCorrection = 0;
+
+    let lastMotionTime = null;
     let lastAcceleration = null;
-    let lastAccelerationTime = null;
 
-    // Показания компаса.
-    let heading = null;
-
-    // Калибровка ускорения в покое.
     let calibrationSamples = [];
     let gravityBaseline = null;
     let calibrated = false;
 
-    // GPS используется для периодической коррекции.
-    let lastGpsCorrection = 0;
-
-    // Параметры фильтрации.
-    let displayedSpeed = 0;
-    let lastRender = performance.now();
+    let lastRenderTime = performance.now();
 
     const MAX_SPEED = 150;
-    const GPS_TIMEOUT = 5000;
-    const GPS_CORRECTION_INTERVAL = 3000;
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
     }
 
-    function renderSpeed(value) {
-        value = clamp(value, 0, MAX_SPEED);
+    /*
+     * КОМПАС
+     *
+     * На iOS используем webkitCompassHeading,
+     * если браузер предоставляет это свойство.
+     *
+     * Стрелка остаётся на север относительно
+     * окружающего мира при повороте телефона.
+     */
 
-        const now = performance.now();
-        const dt = Math.min((now - lastRender) / 1000, 0.1);
-        lastRender = now;
+    function updateCompass(heading) {
+        if (!Number.isFinite(heading)) return;
 
-        // Сглаживание отображения.
-        const smoothing = 1 - Math.exp(-dt * 5);
+        const angle = ((heading % 360) + 360) % 360;
 
-        displayedSpeed += (value - displayedSpeed) * smoothing;
-
-        if (Math.abs(displayedSpeed) < 0.05) {
-            displayedSpeed = 0;
-        }
-
-        speedElement.textContent = displayedSpeed.toFixed(1);
-    }
-
-    function updateCompass(degrees) {
-        if (!Number.isFinite(degrees)) return;
-
-        heading = ((degrees % 360) + 360) % 360;
-
-        // Стрелка показывает север относительно направления,
-        // в котором повернут телефон.
         needle.style.transform =
-            `translateX(-50%) rotate(${-heading}deg)`;
+            `translateX(-50%) rotate(${-angle}deg)`;
     }
 
-    // События ориентации устройства.
     function handleOrientation(event) {
         if (event.webkitCompassHeading != null) {
-            // На iOS это обычно направление на север
-            // в диапазоне 0–360 градусов.
             updateCompass(event.webkitCompassHeading);
-            return;
-        }
-
-        if (event.alpha != null) {
-            // alpha — относительный угол устройства.
-            // Он не всегда соответствует компасному курсу.
+        } else if (event.alpha != null) {
+            /*
+             * Запасной вариант.
+             * alpha не всегда совпадает с показаниями
+             * настоящего магнитного компаса.
+             */
             updateCompass(event.alpha);
         }
     }
 
-    // Сбор данных акселерометра.
+    /*
+     * АКСЕЛЕРОМЕТР
+     *
+     * Экспериментальная оценка движения.
+     * Интегрирование ускорения накапливает ошибки.
+     */
+
     function handleMotion(event) {
-        const acceleration =
-            event.accelerationIncludingGravity;
+        const a = event.accelerationIncludingGravity;
 
-        if (!acceleration) return;
-
-        const x = acceleration.x;
-        const y = acceleration.y;
-        const z = acceleration.z;
-
-        if (x == null || y == null || z == null) return;
+        if (!a ||
+            a.x == null ||
+            a.y == null ||
+            a.z == null) {
+            return;
+        }
 
         const now = performance.now();
 
-        const sample = { x, y, z };
+        const current = {
+            x: a.x,
+            y: a.y,
+            z: a.z
+        };
 
-        // Начальная оценка фонового ускорения.
-        // Она пригодна лишь для неподвижного телефона.
         if (!calibrated) {
-            calibrationSamples.push(sample);
+            calibrationSamples.push(current);
 
             if (calibrationSamples.length > 30) {
                 calibrationSamples.shift();
@@ -331,116 +297,118 @@ button:disabled {
             if (calibrationSamples.length === 30) {
                 gravityBaseline = {
                     x: calibrationSamples.reduce(
-                        (s, p) => s + p.x, 0
+                        (sum, p) => sum + p.x, 0
                     ) / 30,
 
                     y: calibrationSamples.reduce(
-                        (s, p) => s + p.y, 0
+                        (sum, p) => sum + p.y, 0
                     ) / 30,
 
                     z: calibrationSamples.reduce(
-                        (s, p) => s + p.z, 0
+                        (sum, p) => sum + p.z, 0
                     ) / 30
                 };
 
                 calibrated = true;
             }
 
-            lastAcceleration = sample;
-            lastAccelerationTime = now;
+            lastAcceleration = current;
+            lastMotionTime = now;
             return;
         }
 
-        if (lastAcceleration && lastAccelerationTime != null) {
-            const dt = (now - lastAccelerationTime) / 1000;
+        if (lastAcceleration && lastMotionTime !== null) {
+            const dt = (now - lastMotionTime) / 1000;
 
             if (dt > 0 && dt < 0.15) {
-                // Приблизительное изменение ускорения.
-                // Оси телефона меняют направление при повороте.
-                const ax = x - gravityBaseline.x;
-                const ay = y - gravityBaseline.y;
-                const az = z - gravityBaseline.z;
+                const ax = a.x - gravityBaseline.x;
+                const ay = a.y - gravityBaseline.y;
+                const az = a.z - gravityBaseline.z;
 
                 const magnitude = Math.sqrt(
                     ax * ax + ay * ay + az * az
                 );
 
-                // Приблизительное интегрирование.
-                // Ошибка быстро накапливается.
                 estimatedSpeed += magnitude * dt * 3.6;
 
-                // Не позволяем показаниям бесконтрольно расти.
                 estimatedSpeed = clamp(
                     estimatedSpeed, 0, MAX_SPEED
                 );
             }
         }
 
-        lastAcceleration = sample;
-        lastAccelerationTime = now;
+        lastAcceleration = current;
+        lastMotionTime = now;
     }
 
-    // GPS используется для коррекции и проверки.
-    function handlePosition(position) {
-        const coords = position.coords;
+    /*
+     * GPS
+     *
+     * Используется для периодической коррекции.
+     */
+
+    function handleGPS(position) {
+        const now = Date.now();
+        const speed = position.coords.speed;
+
+        lastGpsTime = now;
+
+        if (speed == null || !Number.isFinite(speed)) {
+            return;
+        }
+
+        gpsSpeed = clamp(speed * 3.6, 0, MAX_SPEED);
+
+        if (now - lastCorrection >= 3000) {
+            estimatedSpeed =
+                estimatedSpeed * 0.2 +
+                gpsSpeed * 0.8;
+
+            lastCorrection = now;
+        }
+    }
+
+    function renderSpeed(value) {
+        const now = performance.now();
+
+        const dt = Math.min(
+            (now - lastRenderTime) / 1000,
+            0.1
+        );
+
+        lastRenderTime = now;
+
+        const smoothing = 1 - Math.exp(-dt * 5);
+
+        displayedSpeed +=
+            (value - displayedSpeed) * smoothing;
+
+        if (Math.abs(displayedSpeed) < 0.05) {
+            displayedSpeed = 0;
+        }
+
+        speedElement.textContent =
+            clamp(displayedSpeed, 0, MAX_SPEED).toFixed(1);
+    }
+
+    function update() {
+        if (!running) return;
+
         const now = Date.now();
 
-        if (coords.speed != null &&
-            Number.isFinite(coords.speed)) {
+        /*
+         * GPS — периодическая коррекция.
+         * Между обновлениями GPS используем оценку
+         * по данным датчиков движения.
+         */
 
-            gpsSpeed = coords.speed * 3.6;
-            gpsTime = now;
-
-            // GPS-коррекция периодическая.
-            if (now - lastGpsCorrection >=
-                GPS_CORRECTION_INTERVAL) {
-
-                estimatedSpeed =
-                    estimatedSpeed * 0.2 +
-                    gpsSpeed * 0.8;
-
-                lastGpsCorrection = now;
-            }
-
+        if (gpsSpeed !== null && now - lastGpsTime < 2000) {
             renderSpeed(gpsSpeed);
         } else {
-            gpsTime = now;
-        }
-    }
-
-    function handlePositionError() {
-        // Если GPS недоступен, продолжаем показывать
-        // экспериментальную оценку по ускорению.
-    }
-
-    async function requestMotionPermission() {
-        const requests = [];
-
-        if (typeof DeviceMotionEvent !== "undefined" &&
-            typeof DeviceMotionEvent.requestPermission ===
-                "function") {
-
-            requests.push(
-                DeviceMotionEvent.requestPermission()
-            );
+            renderSpeed(estimatedSpeed);
         }
 
-        if (typeof DeviceOrientationEvent !== "undefined" &&
-            typeof DeviceOrientationEvent.requestPermission ===
-                "function") {
-
-            requests.push(
-                DeviceOrientationEvent.requestPermission()
-            );
-        }
-
-        try {
-            const results = await Promise.all(requests);
-
-            return results.every(result => result === "granted");
-        } catch (error) {
-            return false;
-        }
+        requestAnimationFrame(update);
     }
 
     async function start() {
@@ -449,34 +417,54 @@ button:disabled {
         startButton.disabled = true;
         startButton.textContent = "Запуск…";
 
-        const permissionGranted =
-            await requestMotionPermission();
+        let motionPermission = true;
+        let orientationPermission = true;
 
-        if (!permissionGranted) {
-            startButton.disabled = false;
-            startButton.textContent = "Повторить запуск";
+        try {
+            if (
+                typeof DeviceMotionEvent !== "undefined" &&
+                typeof DeviceMotionEvent.requestPermission ===
+                    "function"
+            ) {
+                motionPermission =
+                    await DeviceMotionEvent.requestPermission()
+                    === "granted";
+            }
+
+            if (
+                typeof DeviceOrientationEvent !== "undefined" &&
+                typeof DeviceOrientationEvent.requestPermission ===
+                    "function"
+            ) {
+                orientationPermission =
+                    await DeviceOrientationEvent.requestPermission()
+                    === "granted";
+            }
+        } catch (error) {
+            motionPermission = false;
+            orientationPermission = false;
         }
 
-        // Слушаем датчики, если они доступны.
-        if (typeof DeviceMotionEvent !== "undefined") {
+        if (motionPermission &&
+            typeof DeviceMotionEvent !== "undefined") {
             window.addEventListener(
                 "devicemotion",
                 handleMotion
             );
         }
 
-        if (typeof DeviceOrientationEvent !== "undefined") {
+        if (orientationPermission &&
+            typeof DeviceOrientationEvent !== "undefined") {
             window.addEventListener(
                 "deviceorientation",
                 handleOrientation
             );
         }
 
-        // GPS используется как дополнительный источник.
         if ("geolocation" in navigator) {
             gpsWatch = navigator.geolocation.watchPosition(
-                handlePosition,
-                handlePositionError,
+                handleGPS,
+                () => {},
                 {
                     enableHighAccuracy: true,
                     maximumAge: 1000,
@@ -486,22 +474,8 @@ button:disabled {
         }
 
         running = true;
-        startButton.textContent = "Датчики запущены";
-        startButton.disabled = true;
 
-        requestAnimationFrame(update);
-    }
-
-    function update() {
-        if (!running) return;
-
-        const now = Date.now();
-
-        // Если GPS давно не обновлялся, показываем оценку
-        // по датчикам движения.
-        if (now - gpsTime > GPS_TIMEOUT) {
-            renderSpeed(estimatedSpeed);
-        }
+        startButton.textContent = "Запущено";
 
         requestAnimationFrame(update);
     }
@@ -510,5 +484,6 @@ button:disabled {
 
 })();
 </script>
+
 </body>
 </html>
